@@ -311,23 +311,6 @@ function App() {
     setSettlementAmount("");
   };
 
-  const totalSpent = transactions.reduce(
-    (total, transaction) => total + transaction.amount,
-    0,
-  );
-
-  const yourShare = transactions.reduce((total, transaction) => {
-    if (transaction.expenseFor === "You") return total + transaction.amount;
-    if (transaction.expenseFor === "Both") return total + transaction.amount / 2;
-    return total;
-  }, 0);
-
-  const yourPaid = transactions
-    .filter((transaction) => transaction.paidBy === "You")
-    .reduce((total, transaction) => total + transaction.amount, 0);
-
-  const partnerPaid = totalSpent - yourPaid;
-
   const currentMonthTransactions = transactions.filter((transaction) =>
     isCurrentMonth(transaction.dateValue),
   );
@@ -342,12 +325,6 @@ function App() {
     if (transaction.expenseFor === "Both") return total + transaction.amount / 2;
     return total;
   }, 0);
-
-  const currentMonthYourPaid = currentMonthTransactions
-    .filter((transaction) => transaction.paidBy === "You")
-    .reduce((total, transaction) => total + transaction.amount, 0);
-
-  const currentMonthPartnerPaid = currentMonthSpent - currentMonthYourPaid;
 
   const insightsTransactions = transactions.filter(
     (transaction) => getMonthKey(transaction.dateValue) === insightsMonth,
@@ -378,13 +355,6 @@ function App() {
 
   const balance = balanceBeforeSettlements + settlementEffect;
 
-  const filteredTransactions =
-    activityFilter === "All"
-      ? transactions
-      : transactions.filter(
-          (transaction) => transaction.paidBy === activityFilter,
-        );
-
   return (
     <div className="app-shell">
       <main className="app">
@@ -411,6 +381,8 @@ function App() {
             onTransactionClick={setSelectedTransaction}
             currentMonthKey={currentMonthKey}
           />
+
+
         ) : (
           <InsightsScreen
             transactions={insightsTransactions}
