@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
+import { supabase } from "./lib/supabase";
 import "./App.css";
 
 type PaidBy = "You" | "Partner";
@@ -130,6 +132,47 @@ const shiftMonth = (monthKey: string, amount: number) => {
 
 
 function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authMode, setAuthMode] = useState<"login" | "signup">("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authDisplayName, setAuthDisplayName] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadSession = async () => {
+      const { data, error } = await supabase.auth.getSession();
+
+      if (!mounted) return;
+
+      if (error) {
+        setAuthError(error.message);
+      } else {
+        setSession(data.session);
+      }
+
+      setAuthLoading(false);
+    };
+
+    loadSession();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (_event, nextSession) => {
+        setSession(nextSession);
+        setAuthLoading(false);
+      },
+    );
+
+    return () => {
+      mounted = false;
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
+
   const [transactions, setTransactions] =
     useState<Transaction[]>(initialTransactions);
 
@@ -161,6 +204,102 @@ function App() {
   const [settlementAmount, setSettlementAmount] = useState("");
   const [settlementMethod, setSettlementMethod] =
     useState<SettlementMethod>("UPI");
+
+  const handleAuth = async () => {
+    const email = authEmail.trim();
+
+    setAuthError("");
+    setAuthMessage("");
+
+    if (!email || !authPassword) {
+      setAuthError("Enter your email and password.");
+      return;
+    }
+
+    if (authPassword.length < 6) {
+      setAuthError("Password must be at least 6 characters.");
+      return;
+    }
+
+    setAuthLoading(true);
+
+    if (authMode === "signup") {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password: authPassword,
+        options: {
+          data: {
+            display_name: authDisplayName.trim() || "User",
+          },
+        },
+      });
+
+      setAuthLoading(false);
+
+      if (error) {
+        setAuthError(error.message);
+        return;
+      }
+
+      if (data.session) {
+        setSession(data.session);
+        return;
+      }
+
+      setAuthMessage(
+        "Account created. Check your email and confirm your address before signing in.",
+      );
+      setAuthMode("login");
+      setAuthPassword("");
+      return;
+    }
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password: authPassword,
+    });
+
+    setAuthLoading(false);
+
+    if (error) {
+      setAuthError(error.message);
+      return;
+    }
+
+    setSession(data.session);
+    setAuthPassword("");
+  };
+
+  if (authLoading) {
+    return (
+      <div className="app-shell">
+        <main className="app">
+          <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
+            <p className="section-kicker">DUOSPEND · LOADING</p>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <AuthScreen
+        mode={authMode}
+        email={authEmail}
+        password={authPassword}
+        displayName={authDisplayName}
+        error={authError}
+        message={authMessage}
+        loading={authLoading}
+        setMode={setAuthMode}
+        setEmail={setAuthEmail}
+        setPassword={setAuthPassword}
+        setDisplayName={setAuthDisplayName}
+        onSubmit={handleAuth}
+      />
+    );
+  }
 
   const formatCurrency = (value: number) =>
     `₹${value.toLocaleString("en-IN")}`;
@@ -350,7 +489,7 @@ function App() {
   const currentMonthKey = getMonthKey(new Date().toISOString());
 
   const settlementEffect = settlements.reduce((total, settlement) => {
-    return total + (settlement.from === "You" ? settlement.amount : -settlement.amount);
+    return total + (settlement.from === "You" ? -settlement.amount : settlement.amount);
   }, 0);
 
   const balance = balanceBeforeSettlements + settlementEffect;
@@ -480,6 +619,151 @@ function App() {
           isEditing={Boolean(editingTransaction)}
         />
       )}
+    </div>
+  );
+}
+
+function AuthScreen({
+  mode,
+  email,
+  password,
+  displayName,
+  error,
+  message,
+  loading,
+  setMode,
+  setEmail,
+  setPassword,
+  setDisplayName,
+  onSubmit,
+}: {
+  mode: "login" | "signup";
+  email: string;
+  password: string;
+  displayName: string;
+  error: string;
+  message: string;
+  loading: boolean;
+  setMode: (mode: "login" | "signup") => void;
+  setEmail: (value: string) => void;
+  setPassword: (value: string) => void;
+  setDisplayName: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  const isSignup = mode === "signup";
+
+  return (
+    <div className="app-shell">
+      <main className="app">
+        <section
+          style={{
+            minHeight: "100vh",
+            display: "grid",
+            placeItems: "center",
+            padding: "32px 20px",
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              maxWidth: 430,
+              padding: 28,
+              borderRadius: 24,
+              background: "var(--surface, #1a1d1a)",
+              border: "1px solid rgba(255,255,255,0.08)",
+              boxSizing: "border-box",
+            }}
+          >
+            <p className="eyebrow">DUOSPEND</p>
+            <h1 style={{ marginTop: 8 }}>{isSignup ? "Create your account" : "Welcome back"}</h1>
+            <p style={{ opacity: 0.7, lineHeight: 1.5 }}>
+              {isSignup
+                ? "Create your private DuoSpend account to continue."
+                : "Sign in to continue to your shared expenses."}
+            </p>
+
+            <div className="segmented-control" style={{ margin: "24px 0" }}>
+              <button
+                type="button"
+                className={!isSignup ? "selected" : ""}
+                onClick={() => {
+                  setMode("login");
+                }}
+              >
+                Log in
+              </button>
+              <button
+                type="button"
+                className={isSignup ? "selected" : ""}
+                onClick={() => {
+                  setMode("signup");
+                }}
+              >
+                Sign up
+              </button>
+            </div>
+
+            {isSignup && (
+              <label className="field">
+                <span>Name</span>
+                <input
+                  type="text"
+                  placeholder="Your name"
+                  value={displayName}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                  autoComplete="name"
+                />
+              </label>
+            )}
+
+            <label className="field">
+              <span>Email</span>
+              <input
+                type="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                autoComplete="email"
+              />
+            </label>
+
+            <label className="field">
+              <span>Password</span>
+              <input
+                type="password"
+                placeholder="At least 6 characters"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") onSubmit();
+                }}
+                autoComplete={isSignup ? "new-password" : "current-password"}
+              />
+            </label>
+
+            {error && (
+              <p style={{ margin: "14px 0", color: "#f08b8b", lineHeight: 1.4 }}>
+                {error}
+              </p>
+            )}
+
+            {message && (
+              <p style={{ margin: "14px 0", color: "#a9c8a9", lineHeight: 1.4 }}>
+                {message}
+              </p>
+            )}
+
+            <button
+              type="button"
+              className="save-expense"
+              onClick={onSubmit}
+              disabled={loading}
+            >
+              {loading ? "Please wait…" : isSignup ? "Create account" : "Log in"}
+            </button>
+          </div>
+        </section>
+      </main>
     </div>
   );
 }
