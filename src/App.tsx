@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
 import "./App.css";
 
 type PaidBy = "You" | "Partner";
 type ExpenseFor = "Both" | "You" | "Partner";
-type Screen = "home" | "activity" | "insights";
+type Screen = "home" | "activity" | "insights" | "settings";
+
+type ThemeMode = "dark" | "light" | "system";
+type AccentId = "sage" | "lavender" | "amber" | "blue";
+type CurrencyCode = "INR" | "USD" | "EUR" | "GBP" | "AED" | "SGD" | "MYR" | "SAR" | "BDT" | "PKR" | "CNY";
 
 type Transaction = {
   id: string;
@@ -43,6 +48,66 @@ const DEFAULT_CATEGORIES = [
   { name: "Other", icon: "📦" },
 ];
 
+const CURRENCY_OPTIONS: Array<{ code: CurrencyCode; name: string; symbol: string; locale: string }> = [
+  { code: "INR", name: "Indian Rupee", symbol: "₹", locale: "en-IN" },
+  { code: "USD", name: "US Dollar", symbol: "$", locale: "en-US" },
+  { code: "EUR", name: "Euro", symbol: "€", locale: "de-DE" },
+  { code: "GBP", name: "British Pound", symbol: "£", locale: "en-GB" },
+  { code: "AED", name: "UAE Dirham", symbol: "د.إ", locale: "en-AE" },
+  { code: "SGD", name: "Singapore Dollar", symbol: "S$", locale: "en-SG" },
+  { code: "MYR", name: "Malaysian Ringgit", symbol: "RM", locale: "ms-MY" },
+  { code: "SAR", name: "Saudi Riyal", symbol: "ر.س", locale: "ar-SA" },
+  { code: "BDT", name: "Bangladeshi Taka", symbol: "৳", locale: "bn-BD" },
+  { code: "PKR", name: "Pakistani Rupee", symbol: "₨", locale: "en-PK" },
+  { code: "CNY", name: "Chinese Yuan", symbol: "¥", locale: "zh-CN" },
+];
+
+const ACCENT_OPTIONS: Array<{ id: AccentId; name: string; value: string; soft: string }> = [
+  { id: "sage", name: "Sage", value: "#9fb69d", soft: "rgba(159,182,157,0.18)" },
+  { id: "lavender", name: "Lavender", value: "#a8a3d6", soft: "rgba(168,163,214,0.18)" },
+  { id: "amber", name: "Amber", value: "#d6b77a", soft: "rgba(214,183,122,0.18)" },
+  { id: "blue", name: "Blue", value: "#8eafcf", soft: "rgba(142,175,207,0.18)" },
+];
+
+const USER_SETTINGS_PREFIX = "duospend-user-settings:";
+
+type UserSettings = {
+  themeMode: ThemeMode;
+  accentId: AccentId;
+};
+
+const getUserSettings = (userId: string): UserSettings => {
+  const fallback: UserSettings = { themeMode: "dark", accentId: "sage" };
+  try {
+    const raw = localStorage.getItem(`${USER_SETTINGS_PREFIX}${userId}`);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Partial<UserSettings>;
+    const themeMode: ThemeMode =
+      parsed.themeMode === "light" || parsed.themeMode === "system" ? parsed.themeMode : "dark";
+    const accentId: AccentId =
+      parsed.accentId === "lavender" || parsed.accentId === "amber" || parsed.accentId === "blue"
+        ? parsed.accentId
+        : "sage";
+    return { themeMode, accentId };
+  } catch {
+    return fallback;
+  }
+};
+
+const saveUserSettings = (userId: string, settings: UserSettings) => {
+  try {
+    localStorage.setItem(`${USER_SETTINGS_PREFIX}${userId}`, JSON.stringify(settings));
+  } catch {
+    // Local preferences are optional; ignore storage failures.
+  }
+};
+
+const getCurrencyOption = (code: CurrencyCode) =>
+  CURRENCY_OPTIONS.find((currency) => currency.code === code) ?? CURRENCY_OPTIONS[0];
+
+const isCurrencyCode = (value: unknown): value is CurrencyCode =>
+  typeof value === "string" && CURRENCY_OPTIONS.some((currency) => currency.code === value);
+
 const HOUSEHOLD_CACHE_PREFIX = "duospend-household-cache:";
 
 type HouseholdCache = {
@@ -51,6 +116,7 @@ type HouseholdCache = {
   inviteCode: string;
   memberCount: number;
   profileDisplayName: string;
+  currencyCode: CurrencyCode;
 };
 
 const getHouseholdCache = (userId: string): HouseholdCache | null => {
@@ -77,6 +143,9 @@ const getHouseholdCache = (userId: string): HouseholdCache | null => {
         typeof parsed.profileDisplayName === "string"
           ? parsed.profileDisplayName
           : "User",
+      currencyCode: isCurrencyCode(parsed.currencyCode)
+        ? parsed.currencyCode
+        : "INR",
     };
   } catch {
     return null;
@@ -201,6 +270,11 @@ function App() {
 
   const [householdId, setHouseholdId] = useState<string | null>(null);
   const [profileDisplayName, setProfileDisplayName] = useState("Reyan");
+  const [currencyCode, setCurrencyCode] = useState<CurrencyCode>("INR");
+  const [themeMode, setThemeMode] = useState<ThemeMode>("dark");
+  const [accentId, setAccentId] = useState<AccentId>("sage");
+  const [settingsActionLoading, setSettingsActionLoading] = useState(false);
+  const [settingsError, setSettingsError] = useState("");
   const [householdLoading, setHouseholdLoading] = useState(true);
   const [householdError, setHouseholdError] = useState("");
   const [householdRetry, setHouseholdRetry] = useState(0);
@@ -257,6 +331,32 @@ function App() {
     useState<SettlementMethod>("UPI");
 
   useEffect(() => {
+    if (!session) return;
+    const settings = getUserSettings(session.user.id);
+    setThemeMode(settings.themeMode);
+    setAccentId(settings.accentId);
+  }, [session]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.theme = themeMode;
+    root.dataset.accent = accentId;
+    const accent = ACCENT_OPTIONS.find((option) => option.id === accentId) ?? ACCENT_OPTIONS[0];
+    root.style.setProperty("--accent", accent.value);
+    root.style.setProperty("--accent-soft", accent.soft);
+    if (themeMode === "system") {
+      root.style.colorScheme = "light dark";
+    } else {
+      root.style.colorScheme = themeMode;
+    }
+  }, [themeMode, accentId]);
+
+  useEffect(() => {
+    if (!session) return;
+    saveUserSettings(session.user.id, { themeMode, accentId });
+  }, [session, themeMode, accentId]);
+
+  useEffect(() => {
     let mounted = true;
 
     const loadSession = async () => {
@@ -299,6 +399,7 @@ function App() {
           setHouseholdLoading(false);
           setHouseholdError("");
           setHouseholdName("DuoSpend Home");
+          setCurrencyCode("INR");
           setInviteCode("");
           setHouseholdMemberCount(0);
           setPartnerUserId(null);
@@ -324,6 +425,7 @@ function App() {
           setHouseholdName(cachedHousehold.householdName);
           setInviteCode(cachedHousehold.inviteCode);
           setHouseholdMemberCount(cachedHousehold.memberCount);
+          setCurrencyCode(cachedHousehold.currencyCode);
           setHouseholdSetupRequired(false);
           setHouseholdLoading(false);
         } else {
@@ -379,7 +481,7 @@ function App() {
         const [householdResult, membersResult, categoriesResult] = await Promise.all([
           supabase
             .from("households")
-            .select("id, name, invite_code")
+            .select("id, name, invite_code, currency")
             .eq("id", activeHouseholdId)
             .single(),
           supabase
@@ -425,6 +527,11 @@ function App() {
         setHouseholdId(activeHouseholdId);
         setHouseholdName(household.name || "DuoSpend Home");
         setInviteCode(household.invite_code || "");
+        setCurrencyCode(
+          isCurrencyCode(household.currency)
+            ? household.currency
+            : "INR",
+        );
         setHouseholdMemberCount(members?.length ?? 0);
         setHouseholdSetupRequired(false);
         setHouseholdLoading(false);
@@ -435,6 +542,10 @@ function App() {
           inviteCode: household.invite_code || "",
           memberCount: members?.length ?? 0,
           profileDisplayName: profile?.display_name || "User",
+          currencyCode:
+            isCurrencyCode(household.currency)
+              ? household.currency
+              : "INR",
         });
       } catch (error) {
         if (!mounted) return;
@@ -973,8 +1084,14 @@ function App() {
     );
   }
 
-  const formatCurrency = (value: number) =>
-    `₹${value.toLocaleString("en-IN")}`;
+  const formatCurrency = (value: number) => {
+    const currency = getCurrencyOption(currencyCode);
+    return new Intl.NumberFormat(currency.locale, {
+      style: "currency",
+      currency: currency.code,
+      maximumFractionDigits: 2,
+    }).format(value);
+  };
 
   const openAddExpense = () => {
     setEditingTransaction(null);
@@ -1271,6 +1388,44 @@ function App() {
     }
   };
 
+  const updateCurrency = async (nextCurrency: CurrencyCode) => {
+    if (!session || !householdId || nextCurrency === currencyCode) return;
+    setSettingsError("");
+    setSettingsActionLoading(true);
+    try {
+      const { error } = await supabase
+        .from("households")
+        .update({ currency: nextCurrency })
+        .eq("id", householdId);
+      if (error) throw error;
+      setCurrencyCode(nextCurrency);
+      saveHouseholdCache(session.user.id, {
+        householdId,
+        householdName,
+        inviteCode,
+        memberCount: householdMemberCount,
+        profileDisplayName,
+        currencyCode: nextCurrency,
+      });
+    } catch (error) {
+      setSettingsError(
+        error instanceof Error ? error.message : "Unable to update household currency.",
+      );
+    } finally {
+      setSettingsActionLoading(false);
+    }
+  };
+
+  const updateTheme = (nextTheme: ThemeMode) => {
+    setThemeMode(nextTheme);
+    setSettingsError("");
+  };
+
+  const updateAccent = (nextAccent: AccentId) => {
+    setAccentId(nextAccent);
+    setSettingsError("");
+  };
+
   const currentMonthTransactions = transactions.filter((transaction) =>
     isCurrentMonth(transaction.dateValue),
   );
@@ -1345,7 +1500,7 @@ function App() {
           />
 
 
-        ) : (
+        ) : screen === "insights" ? (
           <InsightsScreen
             transactions={insightsTransactions}
             totalSpent={insightsSpent}
@@ -1358,6 +1513,26 @@ function App() {
             currentMonthKey={currentMonthKey}
             onMonthChange={setInsightsMonth}
             onBack={() => setScreen("home")}
+          />
+        ) : (
+          <SettingsScreen
+            displayName={profileDisplayName}
+            email={session.user.email ?? ""}
+            householdName={householdName}
+            memberCount={householdMemberCount}
+            inviteCode={inviteCode}
+            currencyCode={currencyCode}
+            themeMode={themeMode}
+            accentId={accentId}
+            currencySaving={settingsActionLoading}
+            error={settingsError}
+            onBack={() => setScreen("home")}
+            onCurrencyChange={updateCurrency}
+            onThemeChange={updateTheme}
+            onAccentChange={updateAccent}
+            onLogout={async () => {
+              await supabase.auth.signOut();
+            }}
           />
         )}
 
@@ -1394,7 +1569,10 @@ function App() {
             <small>Insights</small>
           </button>
 
-          <button className="nav-item">
+          <button
+            className={`nav-item ${screen === "settings" ? "active" : ""}`}
+            onClick={() => setScreen("settings")}
+          >
             <span>⚙</span>
             <small>Settings</small>
           </button>
@@ -1421,6 +1599,7 @@ function App() {
           onClose={closeSettlement}
           onSave={recordSettlement}
           formatCurrency={formatCurrency}
+          currencySymbol={getCurrencyOption(currencyCode).symbol}
           saving={settlementActionLoading}
           error={settlementError}
         />
@@ -1441,6 +1620,7 @@ function App() {
           onClose={closeAddExpense}
           onSave={saveExpense}
           formatCurrency={formatCurrency}
+          currencySymbol={getCurrencyOption(currencyCode).symbol}
           isEditing={Boolean(editingTransaction)}
           saving={expenseActionLoading}
           error={expenseError}
@@ -1456,6 +1636,189 @@ function App() {
         />
       )}
     </div>
+  );
+}
+
+function SettingsScreen({
+  displayName,
+  email,
+  householdName,
+  memberCount,
+  inviteCode,
+  currencyCode,
+  themeMode,
+  accentId,
+  currencySaving,
+  error,
+  onBack,
+  onCurrencyChange,
+  onThemeChange,
+  onAccentChange,
+  onLogout,
+}: {
+  displayName: string;
+  email: string;
+  householdName: string;
+  memberCount: number;
+  inviteCode: string;
+  currencyCode: CurrencyCode;
+  themeMode: ThemeMode;
+  accentId: AccentId;
+  currencySaving: boolean;
+  error: string;
+  onBack: () => void;
+  onCurrencyChange: (value: CurrencyCode) => void | Promise<void>;
+  onThemeChange: (value: ThemeMode) => void;
+  onAccentChange: (value: AccentId) => void;
+  onLogout: () => void | Promise<void>;
+}) {
+  const selectedCurrency = getCurrencyOption(currencyCode);
+
+  return (
+    <>
+      <header className="activity-header settings-header">
+        <button className="back-button" onClick={onBack} aria-label="Back to home">
+          ←
+        </button>
+        <div>
+          <p className="eyebrow">DUOSPEND</p>
+          <h1>Settings</h1>
+        </div>
+        <div className="header-spacer" />
+      </header>
+
+      <section className="settings-hero">
+        <div className="settings-avatar">
+          {displayName.trim().charAt(0).toUpperCase() || "U"}
+        </div>
+        <div>
+          <p className="section-kicker">ACCOUNT</p>
+          <h2>{displayName}</h2>
+          <p>{email}</p>
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <div className="section-heading">
+          <div>
+            <p className="section-kicker">APPEARANCE</p>
+            <h3>Make it yours</h3>
+          </div>
+        </div>
+
+        <div className="settings-card">
+          <div className="settings-row settings-row-stack">
+            <div>
+              <strong>Theme</strong>
+              <span>Choose how DuoSpend looks on this device.</span>
+            </div>
+            <div className="segmented-control settings-segmented">
+              {(["dark", "light", "system"] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  className={themeMode === option ? "selected" : ""}
+                  onClick={() => onThemeChange(option)}
+                >
+                  {option.charAt(0).toUpperCase() + option.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="settings-divider" />
+
+          <div className="settings-row settings-row-stack">
+            <div>
+              <strong>Accent</strong>
+              <span>A restrained highlight color used across DuoSpend.</span>
+            </div>
+            <div className="accent-grid">
+              {ACCENT_OPTIONS.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={`accent-option ${accentId === option.id ? "selected" : ""}`}
+                  style={{ "--swatch": option.value } as CSSProperties}
+                  onClick={() => onAccentChange(option.id)}
+                  aria-label={`${option.name} accent`}
+                  title={option.name}
+                >
+                  <span />
+                  <small>{option.name}</small>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <div className="section-heading">
+          <div>
+            <p className="section-kicker">HOUSEHOLD</p>
+            <h3>{householdName}</h3>
+          </div>
+        </div>
+
+        <div className="settings-card">
+          <div className="settings-row">
+            <div>
+              <strong>Currency</strong>
+              <span>Shared by everyone in this DuoSpend home.</span>
+            </div>
+            <select
+              value={currencyCode}
+              disabled={currencySaving}
+              onChange={(event) => onCurrencyChange(event.target.value as CurrencyCode)}
+              aria-label="Household currency"
+            >
+              {CURRENCY_OPTIONS.map((option) => (
+                <option key={option.code} value={option.code}>
+                  {option.code} · {option.symbol}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="settings-preview">
+            <span>Example</span>
+            <strong>{selectedCurrency.symbol}1,250.00</strong>
+          </div>
+
+          <div className="settings-divider" />
+
+          <div className="settings-row">
+            <div>
+              <strong>Members</strong>
+              <span>{memberCount} / 2 connected</span>
+            </div>
+            <span className="settings-value">{memberCount >= 2 ? "Connected" : "Waiting"}</span>
+          </div>
+
+          {memberCount < 2 && inviteCode && (
+            <>
+              <div className="settings-divider" />
+              <div className="settings-row">
+                <div>
+                  <strong>Invite code</strong>
+                  <span>Share this with your partner.</span>
+                </div>
+                <strong className="settings-code">{inviteCode}</strong>
+              </div>
+            </>
+          )}
+        </div>
+      </section>
+
+      {error && <p className="settings-error">{error}</p>}
+
+      <section className="settings-section settings-danger-section">
+        <button type="button" className="logout-button" onClick={onLogout}>
+          Log out
+        </button>
+      </section>
+    </>
   );
 }
 
@@ -2342,6 +2705,7 @@ function SettlementModal({
   onClose,
   onSave,
   formatCurrency,
+  currencySymbol,
   saving,
   error,
 }: {
@@ -2353,6 +2717,7 @@ function SettlementModal({
   onClose: () => void;
   onSave: () => void | Promise<void>;
   formatCurrency: (value: number) => string;
+  currencySymbol: string;
   saving: boolean;
   error: string;
 }) {
@@ -2387,7 +2752,7 @@ function SettlementModal({
           <span>Amount to settle</span>
 
           <div className="amount-input-wrapper compact">
-            <span>₹</span>
+            <span>{currencySymbol}</span>
             <input
               autoFocus
               type="number"
@@ -2474,6 +2839,7 @@ function AddExpenseModal({
   onClose,
   onSave,
   formatCurrency,
+  currencySymbol,
   isEditing,
   saving,
   error,
@@ -2491,6 +2857,7 @@ function AddExpenseModal({
   onClose: () => void;
   onSave: () => void | Promise<void>;
   formatCurrency: (value: number) => string;
+  currencySymbol: string;
   isEditing: boolean;
   saving: boolean;
   error: string;
@@ -2515,7 +2882,7 @@ function AddExpenseModal({
         </div>
 
         <div className="amount-input-wrapper">
-          <span>₹</span>
+          <span>{currencySymbol}</span>
 
           <input
             autoFocus
