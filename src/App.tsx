@@ -141,38 +141,6 @@ function App() {
   const [authError, setAuthError] = useState("");
   const [authMessage, setAuthMessage] = useState("");
 
-  useEffect(() => {
-    let mounted = true;
-
-    const loadSession = async () => {
-      const { data, error } = await supabase.auth.getSession();
-
-      if (!mounted) return;
-
-      if (error) {
-        setAuthError(error.message);
-      } else {
-        setSession(data.session);
-      }
-
-      setAuthLoading(false);
-    };
-
-    loadSession();
-
-    const { data: authListener } = supabase.auth.onAuthStateChange(
-      (_event, nextSession) => {
-        setSession(nextSession);
-        setAuthLoading(false);
-      },
-    );
-
-    return () => {
-      mounted = false;
-      authListener.subscription.unsubscribe();
-    };
-  }, []);
-
   const [transactions, setTransactions] =
     useState<Transaction[]>(initialTransactions);
 
@@ -204,6 +172,38 @@ function App() {
   const [settlementAmount, setSettlementAmount] = useState("");
   const [settlementMethod, setSettlementMethod] =
     useState<SettlementMethod>("UPI");
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadSession = async () => {
+      const { data, error } = await supabase.auth.getSession();
+
+      if (!mounted) return;
+
+      if (error) {
+        setAuthError(error.message);
+      } else {
+        setSession(data.session);
+      }
+
+      setAuthLoading(false);
+    };
+
+    loadSession();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (_event, nextSession) => {
+        setSession(nextSession);
+        setAuthLoading(false);
+      },
+    );
+
+    return () => {
+      mounted = false;
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
 
   const handleAuth = async () => {
     const email = authEmail.trim();
