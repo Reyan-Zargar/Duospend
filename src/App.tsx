@@ -1334,6 +1334,7 @@ function App() {
         ) : screen === "activity" ? (
           <ActivityScreen
             transactions={transactions}
+            settlements={settlements}
             formatCurrency={formatCurrency}
             filter={activityFilter}
             setFilter={setActivityFilter}
@@ -1907,6 +1908,7 @@ function HomeScreen({
 
 function ActivityScreen({
   transactions,
+  settlements,
   formatCurrency,
   filter,
   setFilter,
@@ -1916,6 +1918,7 @@ function ActivityScreen({
   currentMonthKey,
 }: {
   transactions: Transaction[];
+  settlements: Settlement[];
   formatCurrency: (value: number) => string;
   filter: "All" | "You" | "Partner";
   setFilter: (filter: "All" | "You" | "Partner") => void;
@@ -1938,6 +1941,10 @@ function ActivityScreen({
   const monthTotal = monthTransactions.reduce(
     (total, transaction) => total + transaction.amount,
     0,
+  );
+
+  const monthSettlements = settlements.filter(
+    (settlement) => getMonthKey(settlement.date) === monthKey,
   );
 
   return (
@@ -2014,6 +2021,44 @@ function ActivityScreen({
             <span>◌</span>
             <h3>No expenses here</h3>
             <p>Try another filter, change the month, or add a new expense.</p>
+          </div>
+        )}
+      </section>
+
+      <section className="activity-list-section" style={{ marginTop: 28 }}>
+        <div className="section-heading">
+          <div>
+            <p className="section-kicker">PAYMENTS</p>
+            <h3>Settlement history</h3>
+          </div>
+        </div>
+
+        {monthSettlements.length > 0 ? (
+          <div className="transaction-list">
+            {monthSettlements.map((settlement) => {
+              const youPaid = settlement.from === "You";
+              return (
+                <div className="transaction" key={settlement.id}>
+                  <div className="transaction-icon">{settlement.method === "UPI" ? "↗" : "₹"}</div>
+                  <div className="transaction-info">
+                    <h4>{youPaid ? "You paid partner" : "Partner paid you"}</h4>
+                    <p>
+                      {settlement.method} · {formatTransactionDate(settlement.date)}
+                    </p>
+                  </div>
+                  <div className="transaction-amount">
+                    <strong>{formatCurrency(settlement.amount)}</strong>
+                    <span>{youPaid ? "Payment sent" : "Payment received"}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="empty-state">
+            <span>◌</span>
+            <h3>No settlements here</h3>
+            <p>Recorded UPI and cash payments will appear here.</p>
           </div>
         )}
       </section>
