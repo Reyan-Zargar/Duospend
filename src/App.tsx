@@ -8,11 +8,12 @@ type ExpenseFor = "Both" | "You" | "Partner";
 type Screen = "home" | "activity" | "insights";
 
 type Transaction = {
-  id: number;
+  id: string;
   title: string;
   category: string;
   dateValue: string;
   amount: number;
+  yourShare: number;
   paidBy: PaidBy;
   expenseFor: ExpenseFor;
   icon: string;
@@ -21,45 +22,25 @@ type Transaction = {
 type SettlementMethod = "UPI" | "Cash";
 
 type Settlement = {
-  id: number;
+  id: string;
   amount: number;
+  amountPaise: number;
   from: PaidBy;
   to: PaidBy;
   method: SettlementMethod;
   date: string;
 };
 
-const initialTransactions: Transaction[] = [
-  {
-    id: 1,
-    title: "Groceries",
-    category: "Household",
-    dateValue: "2026-09-05T10:32:00",
-    amount: 840,
-    paidBy: "You",
-    expenseFor: "Both",
-    icon: "🛒",
-  },
-  {
-    id: 2,
-    title: "Electricity",
-    category: "Bills",
-    dateValue: "2026-09-04T18:00:00",
-    amount: 1240,
-    paidBy: "Partner",
-    expenseFor: "Both",
-    icon: "⚡",
-  },
-  {
-    id: 3,
-    title: "Chicken & vegetables",
-    category: "Groceries",
-    dateValue: "2026-08-31T12:00:00",
-    amount: 560,
-    paidBy: "You",
-    expenseFor: "Both",
-    icon: "🥬",
-  },
+const DEFAULT_CATEGORIES = [
+  { name: "Groceries", icon: "🛒" },
+  { name: "Food", icon: "🍽️" },
+  { name: "Housing", icon: "🏠" },
+  { name: "Bills", icon: "⚡" },
+  { name: "Household", icon: "🧼" },
+  { name: "Transport", icon: "🚕" },
+  { name: "Entertainment", icon: "🎮" },
+  { name: "Personal", icon: "👤" },
+  { name: "Other", icon: "📦" },
 ];
 
 const categoryIcons: Record<string, string> = {
@@ -73,6 +54,32 @@ const categoryIcons: Record<string, string> = {
   Personal: "👤",
   Other: "📦",
 };
+
+const parseRupeesToPaise = (value: string) => {
+  const normalized = value.trim();
+
+  if (!/^\d+(\.\d{0,2})?$/.test(normalized)) {
+    return null;
+  }
+
+  const [rupeesPart, paisePart = ""] = normalized.split(".");
+  const rupees = Number(rupeesPart);
+
+  if (!Number.isSafeInteger(rupees) || rupees < 0) {
+    return null;
+  }
+
+  const paise = Number(paisePart.padEnd(2, "0") || "0");
+  const totalPaise = rupees * 100 + paise;
+
+  if (!Number.isSafeInteger(totalPaise) || totalPaise <= 0 || totalPaise > 2_147_483_647) {
+    return null;
+  }
+
+  return totalPaise;
+};
+
+const formatPaiseAsRupees = (paise: number) => paise / 100;
 
 const toLocalDateKey = (date: Date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
@@ -141,8 +148,30 @@ function App() {
   const [authError, setAuthError] = useState("");
   const [authMessage, setAuthMessage] = useState("");
 
+  const [householdId, setHouseholdId] = useState<string | null>(null);
+  const [profileDisplayName, setProfileDisplayName] = useState("Reyan");
+  const [householdLoading, setHouseholdLoading] = useState(true);
+  const [householdError, setHouseholdError] = useState("");
+  const [householdRetry, setHouseholdRetry] = useState(0);
+  const [householdSetupRequired, setHouseholdSetupRequired] = useState(false);
+  const [householdName, setHouseholdName] = useState("DuoSpend Home");
+  const [inviteCode, setInviteCode] = useState("");
+  const [householdActionLoading, setHouseholdActionLoading] = useState(false);
+  const [householdActionError, setHouseholdActionError] = useState("");
+  const [showHouseholdPanel, setShowHouseholdPanel] = useState(false);
+  const [householdMemberCount, setHouseholdMemberCount] = useState(1);
+  const [partnerUserId, setPartnerUserId] = useState<string | null>(null);
+  const [categoryRows, setCategoryRows] = useState<
+    Array<{ id: string; name: string; icon: string }>
+  >([]);
+  const [dataLoading, setDataLoading] = useState(true);
+  const [dataError, setDataError] = useState("");
+  const [dataRetry, setDataRetry] = useState(0);
+  const [expenseActionLoading, setExpenseActionLoading] = useState(false);
+  const [expenseError, setExpenseError] = useState("");
+
   const [transactions, setTransactions] =
-    useState<Transaction[]>(initialTransactions);
+    useState<Transaction[]>([]);
 
   const [screen, setScreen] = useState<Screen>("home");
   const [insightsMonth, setInsightsMonth] = useState(() => {
@@ -156,6 +185,8 @@ function App() {
     useState<Transaction | null>(null);
   const [showSettlement, setShowSettlement] = useState(false);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
+  const [settlementActionLoading, setSettlementActionLoading] = useState(false);
+  const [settlementError, setSettlementError] = useState("");
 
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
@@ -204,6 +235,381 @@ function App() {
       authListener.subscription.unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const bootstrapHousehold = async () => {
+      if (!session) {
+        if (mounted) {
+          setHouseholdId(null);
+          setHouseholdSetupRequired(false);
+          setHouseholdLoading(false);
+          setHouseholdError("");
+          setHouseholdName("DuoSpend Home");
+          setInviteCode("");
+          setHouseholdMemberCount(0);
+          setPartnerUserId(null);
+          setCategoryRows([]);
+          setTransactions([]);
+          setSettlements([]);
+          setDataLoading(false);
+          setDataError("");
+        }
+        return;
+      }
+
+      setHouseholdLoading(true);
+      setHouseholdError("");
+      setHouseholdActionError("");
+
+      try {
+        const userId = session.user.id;
+
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select("display_name")
+          .eq("id", userId)
+          .maybeSingle();
+
+        if (profileError) throw profileError;
+
+        if (mounted && profile?.display_name) {
+          setProfileDisplayName(profile.display_name);
+        }
+
+        const { data: membership, error: membershipError } = await supabase
+          .from("household_members")
+          .select("household_id")
+          .eq("user_id", userId)
+          .limit(1)
+          .maybeSingle();
+
+        if (membershipError) throw membershipError;
+
+        const activeHouseholdId = membership?.household_id ?? null;
+
+        if (!activeHouseholdId) {
+          if (!mounted) return;
+
+          setHouseholdId(null);
+          setPartnerUserId(null);
+          setCategoryRows([]);
+          setTransactions([]);
+          setHouseholdName("DuoSpend Home");
+          setInviteCode("");
+          setHouseholdMemberCount(0);
+          setHouseholdSetupRequired(true);
+          setHouseholdError("");
+          setDataLoading(false);
+          setDataError("");
+          setHouseholdLoading(false);
+          return;
+        }
+
+        const { data: household, error: householdLookupError } = await supabase
+          .from("households")
+          .select("id, name, invite_code")
+          .eq("id", activeHouseholdId)
+          .single();
+
+        if (householdLookupError) throw householdLookupError;
+
+        const { data: members, error: membersError } = await supabase
+          .from("household_members")
+          .select("user_id")
+          .eq("household_id", activeHouseholdId);
+
+        if (membersError) throw membersError;
+
+        const { data: existingCategories, error: categoriesError } = await supabase
+          .from("categories")
+          .select("name")
+          .eq("household_id", activeHouseholdId);
+
+        if (categoriesError) throw categoriesError;
+
+        const existingCategoryNames = new Set(
+          (existingCategories ?? []).map((item) => item.name),
+        );
+
+        const missingCategories = DEFAULT_CATEGORIES.filter(
+          (item) => !existingCategoryNames.has(item.name),
+        ).map((item) => ({
+          household_id: activeHouseholdId,
+          name: item.name,
+          icon: item.icon,
+        }));
+
+        if (missingCategories.length > 0) {
+          const { error: categoryInsertError } = await supabase
+            .from("categories")
+            .insert(missingCategories);
+
+          if (categoryInsertError) throw categoryInsertError;
+        }
+
+        if (!mounted) return;
+
+        setHouseholdId(activeHouseholdId);
+        setHouseholdName(household.name || "DuoSpend Home");
+        setInviteCode(household.invite_code || "");
+        setHouseholdMemberCount(members?.length ?? 0);
+        setHouseholdSetupRequired(false);
+        setHouseholdLoading(false);
+      } catch (error) {
+        if (!mounted) return;
+
+        setHouseholdLoading(false);
+        setHouseholdError(
+          error instanceof Error
+            ? error.message
+            : "Unable to load your DuoSpend household.",
+        );
+      }
+    };
+
+    bootstrapHousehold();
+
+    return () => {
+      mounted = false;
+    };
+  }, [session, householdRetry]);
+
+  const createHousehold = async () => {
+    if (!session) return;
+
+    setHouseholdActionLoading(true);
+    setHouseholdActionError("");
+
+    try {
+      const userId = session.user.id;
+      const generatedInviteCode = crypto
+        .randomUUID()
+        .replace(/-/g, "")
+        .slice(0, 8)
+        .toUpperCase();
+
+      const { data: newHousehold, error: householdInsertError } = await supabase
+        .from("households")
+        .insert({
+          name: householdName.trim() || "DuoSpend Home",
+          created_by: userId,
+          invite_code: generatedInviteCode,
+        })
+        .select("id")
+        .single();
+
+      if (householdInsertError) throw householdInsertError;
+      if (!newHousehold?.id) throw new Error("The household was created without an ID.");
+
+      const { error: memberInsertError } = await supabase
+        .from("household_members")
+        .insert({
+          household_id: newHousehold.id,
+          user_id: userId,
+        });
+
+      if (memberInsertError) throw memberInsertError;
+
+      setHouseholdRetry((value) => value + 1);
+    } catch (error) {
+      setHouseholdActionError(
+        error instanceof Error
+          ? error.message
+          : "Unable to create your household.",
+      );
+    } finally {
+      setHouseholdActionLoading(false);
+    }
+  };
+
+  const joinHousehold = async (code: string) => {
+    const cleanCode = code.trim().toUpperCase();
+
+    if (!cleanCode) {
+      setHouseholdActionError("Enter the invite code shared by your partner.");
+      return;
+    }
+
+    setHouseholdActionLoading(true);
+    setHouseholdActionError("");
+
+    try {
+      const { error } = await supabase.rpc("join_household_by_invite", {
+        p_invite_code: cleanCode,
+      });
+
+      if (error) throw error;
+
+      setHouseholdRetry((value) => value + 1);
+    } catch (error) {
+      setHouseholdActionError(
+        error instanceof Error ? error.message : "Unable to join this household.",
+      );
+    } finally {
+      setHouseholdActionLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadHouseholdData = async () => {
+      if (!session || !householdId) {
+        if (mounted) {
+          setPartnerUserId(null);
+          setCategoryRows([]);
+          setTransactions([]);
+          setDataLoading(false);
+          setDataError("");
+        }
+        return;
+      }
+
+      setDataLoading(true);
+      setDataError("");
+
+      try {
+        const userId = session.user.id;
+
+        const { data: members, error: membersError } = await supabase
+          .from("household_members")
+          .select("user_id")
+          .eq("household_id", householdId);
+
+        if (membersError) throw membersError;
+
+        const nextPartnerUserId =
+          (members ?? []).map((member) => member.user_id).find((id) => id !== userId) ?? null;
+
+        const { data: categories, error: categoriesError } = await supabase
+          .from("categories")
+          .select("id, name, icon")
+          .eq("household_id", householdId)
+          .order("name");
+
+        if (categoriesError) throw categoriesError;
+
+        const { data: expenses, error: expensesError } = await supabase
+          .from("expenses")
+          .select(
+            "id, paid_by, amount, description, category_id, expense_date",
+          )
+          .eq("household_id", householdId)
+          .order("expense_date", { ascending: false });
+
+        if (expensesError) throw expensesError;
+
+        const expenseIds = (expenses ?? []).map((expense) => expense.id);
+        let splits: Array<{ expense_id: string; user_id: string; amount: number }> = [];
+
+        if (expenseIds.length > 0) {
+          const { data: splitRows, error: splitsError } = await supabase
+            .from("expense_splits")
+            .select("expense_id, user_id, amount")
+            .in("expense_id", expenseIds);
+
+          if (splitsError) throw splitsError;
+          splits = splitRows ?? [];
+        }
+
+        const { data: settlementRows, error: settlementsError } = await supabase
+          .from("settlements")
+          .select("id, from_user, to_user, amount, method, settlement_date")
+          .eq("household_id", householdId)
+          .order("settlement_date", { ascending: false });
+
+        if (settlementsError) throw settlementsError;
+
+        const mappedSettlements: Settlement[] = (settlementRows ?? []).map(
+          (settlement) => ({
+            id: settlement.id,
+            amount: formatPaiseAsRupees(settlement.amount),
+            amountPaise: settlement.amount,
+            from: settlement.from_user === userId ? "You" : "Partner",
+            to: settlement.to_user === userId ? "You" : "Partner",
+            method: settlement.method === "Cash" ? "Cash" : "UPI",
+            date: settlement.settlement_date,
+          }),
+        );
+
+        const splitsByExpense = new Map<
+          string,
+          Array<{ user_id: string; amount: number }>
+        >();
+
+        for (const split of splits) {
+          const current = splitsByExpense.get(split.expense_id) ?? [];
+          current.push({ user_id: split.user_id, amount: split.amount });
+          splitsByExpense.set(split.expense_id, current);
+        }
+
+        const categoryMap = new Map<
+          string,
+          { id: string; name: string; icon: string }
+        >((categories ?? []).map((categoryRow) => [
+          categoryRow.id,
+          categoryRow,
+        ]));
+
+        const mappedTransactions: Transaction[] = (expenses ?? []).map((expense) => {
+          const splitRows = splitsByExpense.get(expense.id) ?? [];
+          const hasYouSplit = splitRows.some((split) => split.user_id === userId);
+          const hasPartnerSplit = nextPartnerUserId
+            ? splitRows.some((split) => split.user_id === nextPartnerUserId)
+            : false;
+
+          let expenseFor: ExpenseFor = "You";
+
+          if (hasYouSplit && hasPartnerSplit) {
+            expenseFor = "Both";
+          } else if (hasPartnerSplit) {
+            expenseFor = "Partner";
+          }
+
+          const categoryInfo = categoryMap.get(expense.category_id);
+          const yourSharePaise =
+            splitRows.find((split) => split.user_id === userId)?.amount ?? 0;
+
+          return {
+            id: expense.id,
+            title: expense.description,
+            category: categoryInfo?.name ?? "Other",
+            dateValue: expense.expense_date,
+            amount: formatPaiseAsRupees(expense.amount),
+            yourShare: formatPaiseAsRupees(yourSharePaise),
+            paidBy: expense.paid_by === userId ? "You" : "Partner",
+            expenseFor,
+            icon: categoryInfo?.icon ?? categoryIcons[categoryInfo?.name ?? "Other"] ?? "📦",
+          };
+        });
+
+        if (!mounted) return;
+
+        setPartnerUserId(nextPartnerUserId);
+        setCategoryRows(categories ?? []);
+        setTransactions(mappedTransactions);
+        setSettlements(mappedSettlements);
+        setDataLoading(false);
+      } catch (error) {
+        if (!mounted) return;
+
+        setDataLoading(false);
+        setDataError(
+          error instanceof Error
+            ? error.message
+            : "Unable to load your DuoSpend expenses.",
+        );
+      }
+    };
+
+    loadHouseholdData();
+
+    return () => {
+      mounted = false;
+    };
+  }, [session, householdId, dataRetry]);
 
   const handleAuth = async () => {
     const email = authEmail.trim();
@@ -301,11 +707,144 @@ function App() {
     );
   }
 
+  if (householdLoading) {
+    return (
+      <div className="app-shell">
+        <main className="app">
+          <div
+            style={{
+              minHeight: "100vh",
+              display: "grid",
+              placeItems: "center",
+              padding: 24,
+              textAlign: "center",
+            }}
+          >
+            <div>
+              <p className="section-kicker">DUOSPEND · SETTING UP</p>
+              <h2 style={{ marginTop: 8 }}>Preparing your shared home…</h2>
+              <p style={{ opacity: 0.7, lineHeight: 1.5 }}>
+                Connecting your account to your DuoSpend household.
+              </p>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (householdSetupRequired) {
+    return (
+      <HouseholdSetupScreen
+        displayName={profileDisplayName}
+        householdName={householdName}
+        setHouseholdName={setHouseholdName}
+        inviteCode={inviteCode}
+        setInviteCode={setInviteCode}
+        loading={householdActionLoading}
+        error={householdActionError}
+        onCreate={createHousehold}
+        onJoin={joinHousehold}
+      />
+    );
+  }
+
+  if (householdError || !householdId) {
+    return (
+      <div className="app-shell">
+        <main className="app">
+          <div
+            style={{
+              minHeight: "100vh",
+              display: "grid",
+              placeItems: "center",
+              padding: 24,
+              textAlign: "center",
+            }}
+          >
+            <div style={{ width: "100%", maxWidth: 430 }}>
+              <p className="section-kicker">DUOSPEND · CONNECTION</p>
+              <h2 style={{ marginTop: 8 }}>We couldn’t load your home</h2>
+              <p style={{ opacity: 0.7, lineHeight: 1.5 }}>
+                {householdError || "Your household is not available yet."}
+              </p>
+              <button
+                className="save-expense"
+                type="button"
+                onClick={() => setHouseholdRetry((value) => value + 1)}
+              >
+                Try again
+              </button>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (dataLoading) {
+    return (
+      <div className="app-shell">
+        <main className="app">
+          <div
+            style={{
+              minHeight: "100vh",
+              display: "grid",
+              placeItems: "center",
+              padding: 24,
+              textAlign: "center",
+            }}
+          >
+            <div>
+              <p className="section-kicker">DUOSPEND · LOADING</p>
+              <h2 style={{ marginTop: 8 }}>Loading your expenses…</h2>
+              <p style={{ opacity: 0.7, lineHeight: 1.5 }}>
+                Getting the latest activity from your shared home.
+              </p>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (dataError) {
+    return (
+      <div className="app-shell">
+        <main className="app">
+          <div
+            style={{
+              minHeight: "100vh",
+              display: "grid",
+              placeItems: "center",
+              padding: 24,
+              textAlign: "center",
+            }}
+          >
+            <div style={{ width: "100%", maxWidth: 430 }}>
+              <p className="section-kicker">DUOSPEND · SYNC</p>
+              <h2 style={{ marginTop: 8 }}>We couldn’t load your expenses</h2>
+              <p style={{ opacity: 0.7, lineHeight: 1.5 }}>{dataError}</p>
+              <button
+                className="save-expense"
+                type="button"
+                onClick={() => setDataRetry((value) => value + 1)}
+              >
+                Try again
+              </button>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
   const formatCurrency = (value: number) =>
     `₹${value.toLocaleString("en-IN")}`;
 
   const openAddExpense = () => {
     setEditingTransaction(null);
+    setExpenseError("");
     setAmount("");
     setDescription("");
     setCategory("Groceries");
@@ -316,6 +855,7 @@ function App() {
 
   const openEditExpense = (transaction: Transaction) => {
     setSelectedTransaction(null);
+    setExpenseError("");
     setEditingTransaction(transaction);
     setAmount(String(transaction.amount));
     setDescription(transaction.title);
@@ -327,85 +867,205 @@ function App() {
 
   const closeAddExpense = () => {
     setShowAddExpense(false);
+    setExpenseError("");
     setEditingTransaction(null);
   };
 
-  const saveExpense = () => {
-    const numericAmount = Number(amount);
+  const saveExpense = async () => {
+    setExpenseError("");
 
-    if (!numericAmount || numericAmount <= 0 || !description.trim()) {
+    if (!session || !householdId) {
+      setExpenseError("Your shared home is not ready yet. Please try again.");
       return;
     }
 
-    if (editingTransaction) {
-      setTransactions((current) =>
-        current.map((transaction) =>
-          transaction.id === editingTransaction.id
-            ? {
-                ...transaction,
-                title: description.trim(),
-                category,
-                amount: numericAmount,
-                paidBy,
-                expenseFor,
-                icon: categoryIcons[category] ?? "📦",
-              }
-            : transaction,
-        ),
-      );
-    } else {
-      const newTransaction: Transaction = {
-        id: Date.now(),
-        title: description.trim(),
-        category,
-        dateValue: new Date().toISOString(),
-        amount: numericAmount,
-        paidBy,
-        expenseFor,
-        icon: categoryIcons[category] ?? "📦",
-      };
+    const amountPaise = parseRupeesToPaise(amount);
+    const cleanDescription = description.trim();
+    const selectedCategory = categoryRows.find((row) => row.name === category);
 
-      setTransactions((current) => [newTransaction, ...current]);
+    if (!amountPaise || !cleanDescription) {
+      setExpenseError("Enter a valid amount and description.");
+      return;
     }
 
-    setShowAddExpense(false);
-    setEditingTransaction(null);
+    if (!selectedCategory) {
+      setExpenseError("Please choose a valid category.");
+      return;
+    }
+
+    const userId = session.user.id;
+    const paidByUserId = paidBy === "You" ? userId : partnerUserId;
+
+    if (!paidByUserId) {
+      setExpenseError("Your partner has not joined this household yet.");
+      return;
+    }
+
+    if (expenseFor === "Both" && !partnerUserId) {
+      setExpenseError("Your partner needs to join before a shared split can be recorded.");
+      return;
+    }
+
+    const splitRows =
+      expenseFor === "Both" && partnerUserId
+        ? [
+            {
+              user_id: userId,
+              amount: Math.floor(amountPaise / 2),
+            },
+            {
+              user_id: partnerUserId,
+              amount: amountPaise - Math.floor(amountPaise / 2),
+            },
+          ]
+        : [
+            {
+              user_id: expenseFor === "Partner" ? partnerUserId! : userId,
+              amount: amountPaise,
+            },
+          ];
+
+    setExpenseActionLoading(true);
+
+    try {
+      if (editingTransaction) {
+        const { error: updateError } = await supabase
+          .from("expenses")
+          .update({
+            paid_by: paidByUserId,
+            amount: amountPaise,
+            description: cleanDescription,
+            category_id: selectedCategory.id,
+          })
+          .eq("id", editingTransaction.id)
+          .eq("household_id", householdId);
+
+        if (updateError) throw updateError;
+
+        const { error: deleteSplitsError } = await supabase
+          .from("expense_splits")
+          .delete()
+          .eq("expense_id", editingTransaction.id);
+
+        if (deleteSplitsError) throw deleteSplitsError;
+
+        const { error: insertSplitsError } = await supabase
+          .from("expense_splits")
+          .insert(
+            splitRows.map((split) => ({
+              expense_id: editingTransaction.id,
+              user_id: split.user_id,
+              amount: split.amount,
+            })),
+          );
+
+        if (insertSplitsError) throw insertSplitsError;
+      } else {
+        const { data: createdExpense, error: createError } = await supabase
+          .from("expenses")
+          .insert({
+            household_id: householdId,
+            created_by: userId,
+            paid_by: paidByUserId,
+            amount: amountPaise,
+            description: cleanDescription,
+            category_id: selectedCategory.id,
+            expense_date: new Date().toISOString(),
+          })
+          .select("id")
+          .single();
+
+        if (createError) throw createError;
+        if (!createdExpense?.id) {
+          throw new Error("The expense was created without an ID.");
+        }
+
+        const { error: insertSplitsError } = await supabase
+          .from("expense_splits")
+          .insert(
+            splitRows.map((split) => ({
+              expense_id: createdExpense.id,
+              user_id: split.user_id,
+              amount: split.amount,
+            })),
+          );
+
+        if (insertSplitsError) {
+          await supabase
+            .from("expenses")
+            .delete()
+            .eq("id", createdExpense.id)
+            .eq("household_id", householdId);
+          throw insertSplitsError;
+        }
+      }
+
+      setShowAddExpense(false);
+      setEditingTransaction(null);
+      setAmount("");
+      setDescription("");
+      setDataRetry((value) => value + 1);
+    } catch (error) {
+      setExpenseError(
+        error instanceof Error
+          ? error.message
+          : "Unable to save this expense.",
+      );
+    } finally {
+      setExpenseActionLoading(false);
+    }
   };
 
-  const deleteExpense = (transaction: Transaction) => {
+  const deleteExpense = async (transaction: Transaction) => {
     const confirmed = window.confirm(
       `Delete "${transaction.title}" for ${formatCurrency(transaction.amount)}?`,
     );
 
-    if (!confirmed) {
+    if (!confirmed || !householdId) {
       return;
     }
 
-    setTransactions((current) =>
-      current.filter((item) => item.id !== transaction.id),
-    );
-    setSelectedTransaction(null);
+    setExpenseError("");
+    setExpenseActionLoading(true);
+
+    try {
+      const { error } = await supabase
+        .from("expenses")
+        .delete()
+        .eq("id", transaction.id)
+        .eq("household_id", householdId);
+
+      if (error) throw error;
+
+      setSelectedTransaction(null);
+      setDataRetry((value) => value + 1);
+    } catch (error) {
+      setExpenseError(
+        error instanceof Error
+          ? error.message
+          : "Unable to delete this expense.",
+      );
+    } finally {
+      setExpenseActionLoading(false);
+    }
   };
 
 
-  const balanceBeforeSettlements = transactions.reduce((total, transaction) => {
-    let yourShare = 0;
 
-    if (transaction.expenseFor === "Both") {
-      yourShare = transaction.amount / 2;
-    }
+  const balanceBeforeSettlementsPaise = transactions.reduce(
+    (total, transaction) => {
+      const amountYouPaidPaise =
+        transaction.paidBy === "You" ? Math.round(transaction.amount * 100) : 0;
 
-    if (transaction.expenseFor === "You") {
-      yourShare = transaction.amount;
-    }
+      return total + amountYouPaidPaise - Math.round(transaction.yourShare * 100);
+    },
+    0,
+  );
 
-    const amountYouPaid =
-      transaction.paidBy === "You" ? transaction.amount : 0;
-
-    return total + amountYouPaid - yourShare;
-  }, 0);
+  const balanceBeforeSettlements = balanceBeforeSettlementsPaise / 100;
 
   const openSettlement = () => {
+    setSettlementError("");
     setSettlementAmount(
       balanceBeforeSettlements !== 0
         ? String(Math.abs(balanceBeforeSettlements))
@@ -416,38 +1076,65 @@ function App() {
   };
 
   const closeSettlement = () => {
+    if (settlementActionLoading) return;
     setShowSettlement(false);
+    setSettlementError("");
   };
 
-  const recordSettlement = () => {
-    const numericAmount = Number(settlementAmount);
+  const recordSettlement = async () => {
+    setSettlementError("");
 
-    if (
-      !numericAmount ||
-      numericAmount <= 0 ||
-      balanceBeforeSettlements === 0
-    ) {
+    if (!session || !householdId || !partnerUserId) {
+      setSettlementError("Both household members need to be connected before settling up.");
       return;
     }
 
-    const from: PaidBy =
-      balanceBeforeSettlements > 0 ? "Partner" : "You";
-    const to: PaidBy = from === "You" ? "Partner" : "You";
+    const amountPaise = parseRupeesToPaise(settlementAmount);
 
-    setSettlements((current) => [
-      {
-        id: Date.now(),
-        amount: numericAmount,
-        from,
-        to,
-        method: settlementMethod,
-        date: "Just now",
-      },
-      ...current,
-    ]);
+    if (!amountPaise || balanceBeforeSettlementsPaise === 0) {
+      setSettlementError("Enter a valid settlement amount.");
+      return;
+    }
 
-    setShowSettlement(false);
-    setSettlementAmount("");
+    if (amountPaise > Math.abs(balanceBeforeSettlementsPaise)) {
+      setSettlementError("The settlement cannot be greater than the outstanding balance.");
+      return;
+    }
+
+    const userId = session.user.id;
+    const fromUserId = balanceBeforeSettlementsPaise > 0 ? partnerUserId : userId;
+    const toUserId = fromUserId === userId ? partnerUserId : userId;
+
+    setSettlementActionLoading(true);
+
+    try {
+      const { error } = await supabase
+        .from("settlements")
+        .insert({
+          household_id: householdId,
+          from_user: fromUserId,
+          to_user: toUserId,
+          amount: amountPaise,
+          method: settlementMethod,
+          settlement_date: new Date().toISOString(),
+          created_by: userId,
+        });
+
+      if (error) throw error;
+
+      setShowSettlement(false);
+      setSettlementAmount("");
+      setSettlementError("");
+      setDataRetry((value) => value + 1);
+    } catch (error) {
+      setSettlementError(
+        error instanceof Error
+          ? error.message
+          : "Unable to record this payment.",
+      );
+    } finally {
+      setSettlementActionLoading(false);
+    }
   };
 
   const currentMonthTransactions = transactions.filter((transaction) =>
@@ -459,11 +1146,10 @@ function App() {
     0,
   );
 
-  const currentMonthYourShare = currentMonthTransactions.reduce((total, transaction) => {
-    if (transaction.expenseFor === "You") return total + transaction.amount;
-    if (transaction.expenseFor === "Both") return total + transaction.amount / 2;
-    return total;
-  }, 0);
+  const currentMonthYourShare = currentMonthTransactions.reduce(
+    (total, transaction) => total + transaction.yourShare,
+    0,
+  );
 
   const insightsTransactions = transactions.filter(
     (transaction) => getMonthKey(transaction.dateValue) === insightsMonth,
@@ -474,11 +1160,10 @@ function App() {
     0,
   );
 
-  const insightsYourShare = insightsTransactions.reduce((total, transaction) => {
-    if (transaction.expenseFor === "You") return total + transaction.amount;
-    if (transaction.expenseFor === "Both") return total + transaction.amount / 2;
-    return total;
-  }, 0);
+  const insightsYourShare = insightsTransactions.reduce(
+    (total, transaction) => total + transaction.yourShare,
+    0,
+  );
 
   const insightsYourPaid = insightsTransactions
     .filter((transaction) => transaction.paidBy === "You")
@@ -488,11 +1173,12 @@ function App() {
 
   const currentMonthKey = getMonthKey(new Date().toISOString());
 
-  const settlementEffect = settlements.reduce((total, settlement) => {
-    return total + (settlement.from === "You" ? -settlement.amount : settlement.amount);
+  const settlementEffectPaise = settlements.reduce((total, settlement) => {
+    return total + (settlement.from === "Partner" ? -settlement.amountPaise : settlement.amountPaise);
   }, 0);
 
-  const balance = balanceBeforeSettlements + settlementEffect;
+  const balancePaise = balanceBeforeSettlementsPaise + settlementEffectPaise;
+  const balance = balancePaise / 100;
 
   return (
     <div className="app-shell">
@@ -508,6 +1194,8 @@ function App() {
             onTransactionClick={setSelectedTransaction}
             onSettleUp={openSettlement}
             yourShare={currentMonthYourShare}
+            displayName={profileDisplayName}
+            onHousehold={() => setShowHouseholdPanel(true)}
           />
         ) : screen === "activity" ? (
           <ActivityScreen
@@ -598,6 +1286,8 @@ function App() {
           onClose={closeSettlement}
           onSave={recordSettlement}
           formatCurrency={formatCurrency}
+          saving={settlementActionLoading}
+          error={settlementError}
         />
       )}
 
@@ -617,6 +1307,17 @@ function App() {
           onSave={saveExpense}
           formatCurrency={formatCurrency}
           isEditing={Boolean(editingTransaction)}
+          saving={expenseActionLoading}
+          error={expenseError}
+        />
+      )}
+
+      {showHouseholdPanel && (
+        <HouseholdPanelModal
+          householdName={householdName}
+          inviteCode={inviteCode}
+          memberCount={householdMemberCount}
+          onClose={() => setShowHouseholdPanel(false)}
         />
       )}
     </div>
@@ -768,6 +1469,194 @@ function AuthScreen({
   );
 }
 
+function HouseholdSetupScreen({
+  displayName,
+  householdName,
+  setHouseholdName,
+  inviteCode,
+  setInviteCode,
+  loading,
+  error,
+  onCreate,
+  onJoin,
+}: {
+  displayName: string;
+  householdName: string;
+  setHouseholdName: (value: string) => void;
+  inviteCode: string;
+  setInviteCode: (value: string) => void;
+  loading: boolean;
+  error: string;
+  onCreate: () => void;
+  onJoin: (code: string) => void;
+}) {
+  const [mode, setMode] = useState<"join" | "create">("join");
+
+  return (
+    <div className="app-shell">
+      <main className="app">
+        <section
+          style={{
+            minHeight: "100vh",
+            display: "grid",
+            placeItems: "center",
+            padding: "32px 20px",
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              maxWidth: 430,
+              padding: 28,
+              borderRadius: 24,
+              background: "var(--surface, #1a1d1a)",
+              border: "1px solid rgba(255,255,255,0.08)",
+              boxSizing: "border-box",
+            }}
+          >
+            <p className="eyebrow">DUOSPEND · SHARED HOME</p>
+            <h1 style={{ marginTop: 8 }}>Welcome, {displayName}</h1>
+            <p style={{ opacity: 0.7, lineHeight: 1.5 }}>
+              Join your partner’s DuoSpend home, or create a new one.
+            </p>
+
+            <div className="segmented-control" style={{ margin: "24px 0" }}>
+              <button
+                type="button"
+                className={mode === "join" ? "selected" : ""}
+                onClick={() => setMode("join")}
+              >
+                Join a home
+              </button>
+              <button
+                type="button"
+                className={mode === "create" ? "selected" : ""}
+                onClick={() => setMode("create")}
+              >
+                Create one
+              </button>
+            </div>
+
+            {mode === "join" ? (
+              <label className="field">
+                <span>Invite code</span>
+                <input
+                  type="text"
+                  placeholder="e.g. A1B2C3D4"
+                  value={inviteCode}
+                  onChange={(event) => setInviteCode(event.target.value.toUpperCase())}
+                  autoCapitalize="characters"
+                  autoComplete="off"
+                  maxLength={8}
+                />
+              </label>
+            ) : (
+              <label className="field">
+                <span>Home name</span>
+                <input
+                  type="text"
+                  placeholder="DuoSpend Home"
+                  value={householdName}
+                  onChange={(event) => setHouseholdName(event.target.value)}
+                  maxLength={60}
+                />
+              </label>
+            )}
+
+            {error && (
+              <p style={{ margin: "14px 0", color: "#f08b8b", lineHeight: 1.4 }}>
+                {error}
+              </p>
+            )}
+
+            <button
+              type="button"
+              className="save-expense"
+              disabled={loading || (mode === "join" && !inviteCode.trim())}
+              onClick={() => (mode === "join" ? onJoin(inviteCode) : onCreate())}
+            >
+              {loading ? "Please wait…" : mode === "join" ? "Join home" : "Create home"}
+            </button>
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+}
+
+function HouseholdPanelModal({
+  householdName,
+  inviteCode,
+  memberCount,
+  onClose,
+}: {
+  householdName: string;
+  inviteCode: string;
+  memberCount: number;
+  onClose: () => void;
+}) {
+  const [copyMessage, setCopyMessage] = useState("");
+
+  const copyInviteCode = async () => {
+    if (!inviteCode) return;
+
+    try {
+      await navigator.clipboard.writeText(inviteCode);
+      setCopyMessage("Copied");
+    } catch {
+      setCopyMessage("Copy failed");
+    }
+
+    window.setTimeout(() => setCopyMessage(""), 1800);
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <section
+        className="expense-details-modal"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="modal-header">
+          <div>
+            <p className="section-kicker">SHARED HOME</p>
+            <h2>{householdName}</h2>
+          </div>
+
+          <button className="close-button" onClick={onClose}>
+            ×
+          </button>
+        </div>
+
+        <div className="details-grid">
+          <div>
+            <span>Members</span>
+            <strong>{memberCount} / 2</strong>
+          </div>
+          <div>
+            <span>Status</span>
+            <strong>{memberCount >= 2 ? "Both connected" : "Waiting for partner"}</strong>
+          </div>
+        </div>
+
+        {inviteCode && memberCount < 2 && (
+          <div className="settlement-summary" style={{ marginTop: 18 }}>
+            <span>Partner invite code</span>
+            <strong style={{ letterSpacing: "0.14em" }}>{inviteCode}</strong>
+          </div>
+        )}
+
+        {memberCount < 2 && (
+          <div className="details-actions" style={{ marginTop: 18 }}>
+            <button className="edit-expense-button" onClick={copyInviteCode}>
+              {copyMessage || "Copy invite code"}
+            </button>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function HomeScreen({
   balance,
   totalSpent,
@@ -778,6 +1667,8 @@ function HomeScreen({
   onTransactionClick,
   onSettleUp,
   yourShare,
+  displayName,
+  onHousehold,
 }: {
   balance: number;
   totalSpent: number;
@@ -788,17 +1679,19 @@ function HomeScreen({
   onTransactionClick: (transaction: Transaction) => void;
   onSettleUp: () => void;
   yourShare: number;
+  displayName: string;
+  onHousehold: () => void;
 }) {
   return (
     <>
       <header className="topbar">
         <div>
           <p className="eyebrow">DUOSPEND</p>
-          <h1>Good morning, Reyan</h1>
+          <h1>Good morning, {displayName}</h1>
         </div>
 
-        <button className="avatar" aria-label="Profile">
-          R
+        <button className="avatar" aria-label="Household" onClick={onHousehold}>
+          {displayName.trim().charAt(0).toUpperCase() || "R"}
         </button>
       </header>
 
@@ -1270,6 +2163,8 @@ function SettlementModal({
   onClose,
   onSave,
   formatCurrency,
+  saving,
+  error,
 }: {
   balance: number;
   amount: string;
@@ -1277,8 +2172,10 @@ function SettlementModal({
   method: SettlementMethod;
   setMethod: (value: SettlementMethod) => void;
   onClose: () => void;
-  onSave: () => void;
+  onSave: () => void | Promise<void>;
   formatCurrency: (value: number) => string;
+  saving: boolean;
+  error: string;
 }) {
   const youReceive = balance > 0;
   const directionText = youReceive
@@ -1345,6 +2242,12 @@ function SettlementModal({
           </div>
         </div>
 
+        {error && (
+          <p style={{ margin: "14px 0", color: "#f08b8b", lineHeight: 1.4 }}>
+            {error}
+          </p>
+        )}
+
         <div className="settlement-note">
           <span>After this payment</span>
           <strong>
@@ -1367,10 +2270,11 @@ function SettlementModal({
             !amount ||
             Number(amount) <= 0 ||
             balance === 0 ||
-            Number(amount) > Math.abs(balance)
+            Number(amount) > Math.abs(balance) ||
+            saving
           }
         >
-          Record payment
+          {saving ? "Recording…" : "Record payment"}
         </button>
       </section>
     </div>
@@ -1392,6 +2296,8 @@ function AddExpenseModal({
   onSave,
   formatCurrency,
   isEditing,
+  saving,
+  error,
 }: {
   amount: string;
   setAmount: (value: string) => void;
@@ -1404,9 +2310,11 @@ function AddExpenseModal({
   expenseFor: ExpenseFor;
   setExpenseFor: (value: ExpenseFor) => void;
   onClose: () => void;
-  onSave: () => void;
+  onSave: () => void | Promise<void>;
   formatCurrency: (value: number) => string;
   isEditing: boolean;
+  saving: boolean;
+  error: string;
 }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -1531,12 +2439,18 @@ function AddExpenseModal({
           </div>
         )}
 
+        {error && (
+          <p style={{ margin: "14px 0 0", color: "#f08b8b", lineHeight: 1.4 }}>
+            {error}
+          </p>
+        )}
+
         <button
           className="save-expense"
           onClick={onSave}
-          disabled={!amount || !description.trim()}
+          disabled={saving || !amount || !description.trim()}
         >
-          {isEditing ? "Save changes" : "Save expense"}
+          {saving ? "Saving…" : isEditing ? "Save changes" : "Save expense"}
         </button>
       </section>
     </div>
