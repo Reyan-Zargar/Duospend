@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
 import "./App.css";
@@ -42,6 +42,57 @@ const DEFAULT_CATEGORIES = [
   { name: "Personal", icon: "👤" },
   { name: "Other", icon: "📦" },
 ];
+
+const HOUSEHOLD_CACHE_PREFIX = "duospend-household-cache:";
+
+type HouseholdCache = {
+  householdId: string;
+  householdName: string;
+  inviteCode: string;
+  memberCount: number;
+  profileDisplayName: string;
+};
+
+const getHouseholdCache = (userId: string): HouseholdCache | null => {
+  try {
+    const raw = localStorage.getItem(`${HOUSEHOLD_CACHE_PREFIX}${userId}`);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as Partial<HouseholdCache>;
+
+    if (!parsed.householdId || typeof parsed.householdId !== "string") {
+      return null;
+    }
+
+    return {
+      householdId: parsed.householdId,
+      householdName:
+        typeof parsed.householdName === "string"
+          ? parsed.householdName
+          : "DuoSpend Home",
+      inviteCode: typeof parsed.inviteCode === "string" ? parsed.inviteCode : "",
+      memberCount:
+        typeof parsed.memberCount === "number" ? parsed.memberCount : 1,
+      profileDisplayName:
+        typeof parsed.profileDisplayName === "string"
+          ? parsed.profileDisplayName
+          : "User",
+    };
+  } catch {
+    return null;
+  }
+};
+
+const saveHouseholdCache = (userId: string, cache: HouseholdCache) => {
+  try {
+    localStorage.setItem(
+      `${HOUSEHOLD_CACHE_PREFIX}${userId}`,
+      JSON.stringify(cache),
+    );
+  } catch {
+    // Local storage is only a startup optimization; ignore storage failures.
+  }
+};
 
 const categoryIcons: Record<string, string> = {
   Groceries: "🛒",
@@ -167,6 +218,7 @@ function App() {
   const [dataLoading, setDataLoading] = useState(true);
   const [dataError, setDataError] = useState("");
   const [dataRetry, setDataRetry] = useState(0);
+  const dataLoadedRef = useRef(false);
   const [expenseActionLoading, setExpenseActionLoading] = useState(false);
   const [expenseError, setExpenseError] = useState("");
 
@@ -259,33 +311,50 @@ function App() {
         return;
       }
 
-      setHouseholdLoading(true);
-      setHouseholdError("");
-      setHouseholdActionError("");
+      const userId = session.user.id;
+      const cachedHousehold = getHouseholdCache(userId);
+
+      if (mounted) {
+        setHouseholdError("");
+        setHouseholdActionError("");
+
+        if (cachedHousehold) {
+          setProfileDisplayName(cachedHousehold.profileDisplayName);
+          setHouseholdId(cachedHousehold.householdId);
+          setHouseholdName(cachedHousehold.householdName);
+          setInviteCode(cachedHousehold.inviteCode);
+          setHouseholdMemberCount(cachedHousehold.memberCount);
+          setHouseholdSetupRequired(false);
+          setHouseholdLoading(false);
+        } else {
+          setHouseholdLoading(true);
+        }
+      }
 
       try {
-        const userId = session.user.id;
+        const [profileResult, membershipResult] = await Promise.all([
+          supabase
+            .from("profiles")
+            .select("display_name")
+            .eq("id", userId)
+            .maybeSingle(),
+          supabase
+            .from("household_members")
+            .select("household_id")
+            .eq("user_id", userId)
+            .limit(1)
+            .maybeSingle(),
+        ]);
 
-        const { data: profile, error: profileError } = await supabase
-          .from("profiles")
-          .select("display_name")
-          .eq("id", userId)
-          .maybeSingle();
+        if (profileResult.error) throw profileResult.error;
+        if (membershipResult.error) throw membershipResult.error;
 
-        if (profileError) throw profileError;
+        const profile = profileResult.data;
+        const membership = membershipResult.data;
 
         if (mounted && profile?.display_name) {
           setProfileDisplayName(profile.display_name);
         }
-
-        const { data: membership, error: membershipError } = await supabase
-          .from("household_members")
-          .select("household_id")
-          .eq("user_id", userId)
-          .limit(1)
-          .maybeSingle();
-
-        if (membershipError) throw membershipError;
 
         const activeHouseholdId = membership?.household_id ?? null;
 
@@ -307,27 +376,29 @@ function App() {
           return;
         }
 
-        const { data: household, error: householdLookupError } = await supabase
-          .from("households")
-          .select("id, name, invite_code")
-          .eq("id", activeHouseholdId)
-          .single();
+        const [householdResult, membersResult, categoriesResult] = await Promise.all([
+          supabase
+            .from("households")
+            .select("id, name, invite_code")
+            .eq("id", activeHouseholdId)
+            .single(),
+          supabase
+            .from("household_members")
+            .select("user_id")
+            .eq("household_id", activeHouseholdId),
+          supabase
+            .from("categories")
+            .select("name")
+            .eq("household_id", activeHouseholdId),
+        ]);
 
-        if (householdLookupError) throw householdLookupError;
+        if (householdResult.error) throw householdResult.error;
+        if (membersResult.error) throw membersResult.error;
+        if (categoriesResult.error) throw categoriesResult.error;
 
-        const { data: members, error: membersError } = await supabase
-          .from("household_members")
-          .select("user_id")
-          .eq("household_id", activeHouseholdId);
-
-        if (membersError) throw membersError;
-
-        const { data: existingCategories, error: categoriesError } = await supabase
-          .from("categories")
-          .select("name")
-          .eq("household_id", activeHouseholdId);
-
-        if (categoriesError) throw categoriesError;
+        const household = householdResult.data;
+        const members = membersResult.data;
+        const existingCategories = categoriesResult.data;
 
         const existingCategoryNames = new Set(
           (existingCategories ?? []).map((item) => item.name),
@@ -357,6 +428,14 @@ function App() {
         setHouseholdMemberCount(members?.length ?? 0);
         setHouseholdSetupRequired(false);
         setHouseholdLoading(false);
+
+        saveHouseholdCache(userId, {
+          householdId: activeHouseholdId,
+          householdName: household.name || "DuoSpend Home",
+          inviteCode: household.invite_code || "",
+          memberCount: members?.length ?? 0,
+          profileDisplayName: profile?.display_name || "User",
+        });
       } catch (error) {
         if (!mounted) return;
 
@@ -457,6 +536,7 @@ function App() {
 
     const loadHouseholdData = async () => {
       if (!session || !householdId) {
+        dataLoadedRef.current = false;
         if (mounted) {
           setPartnerUserId(null);
           setCategoryRows([]);
@@ -467,7 +547,11 @@ function App() {
         return;
       }
 
-      setDataLoading(true);
+      const showBlockingLoader = !dataLoadedRef.current;
+
+      if (showBlockingLoader) {
+        setDataLoading(true);
+      }
       setDataError("");
 
       try {
@@ -591,6 +675,7 @@ function App() {
         setCategoryRows(categories ?? []);
         setTransactions(mappedTransactions);
         setSettlements(mappedSettlements);
+        dataLoadedRef.current = true;
         setDataLoading(false);
       } catch (error) {
         if (!mounted) return;
@@ -610,6 +695,55 @@ function App() {
       mounted = false;
     };
   }, [session, householdId, dataRetry]);
+
+  useEffect(() => {
+    if (!session || !householdId) {
+      return;
+    }
+
+    const channel = supabase
+      .channel(`duospend-household-${householdId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "expenses",
+          filter: `household_id=eq.${householdId}`,
+        },
+        () => {
+          setDataRetry((value) => value + 1);
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "settlements",
+          filter: `household_id=eq.${householdId}`,
+        },
+        () => {
+          setDataRetry((value) => value + 1);
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "expense_splits",
+        },
+        () => {
+          setDataRetry((value) => value + 1);
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [session, householdId]);
 
   const handleAuth = async () => {
     const email = authEmail.trim();
