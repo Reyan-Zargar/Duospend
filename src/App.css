@@ -32,3 +32,194 @@ button,input,select{font:inherit} button{color:inherit} button:focus-visible,inp
 @keyframes fade-in{from{opacity:0}to{opacity:1}}@keyframes modal-in{from{opacity:0;transform:translateY(8px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}
 @media(max-width:640px){.app-shell{padding:20px 14px 112px}.balance-card{padding:20px}.balance-top{flex-direction:column}.summary-grid,.insight-stat-grid{grid-template-columns:1fr}.transaction{grid-template-columns:auto minmax(0,1fr)}.transaction-amount{grid-column:2;text-align:left;min-width:0}.transaction-amount span{margin-top:1px}.details-grid{grid-template-columns:1fr}.accent-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.settings-row{align-items:stretch;flex-direction:column}.settings-row select{width:100%}.settings-segmented{max-width:none}.month-selector{grid-template-columns:auto 36px minmax(0,1fr) 36px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
+
+
+/* DuoSpend premium visual layer + requested UI refinements */
+:root {
+  --bg: #0c1210;
+  --surface: rgba(20, 27, 23, .88);
+  --surface-2: rgba(27, 35, 30, .92);
+  --surface-3: rgba(34, 43, 37, .96);
+  --border: rgba(255,255,255,.10);
+  --border-strong: rgba(255,255,255,.17);
+  --shadow: 0 24px 70px rgba(0,0,0,.30);
+}
+:root[data-theme="light"] {
+  --bg: #e8edef;
+  --surface: rgba(255,255,255,.74);
+  --surface-2: rgba(247,250,249,.88);
+  --surface-3: rgba(237,243,241,.96);
+  --border: rgba(28,44,36,.11);
+  --border-strong: rgba(28,44,36,.17);
+  --shadow: 0 22px 60px rgba(40,55,48,.14);
+}
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    --bg: #e8edef;
+    --surface: rgba(255,255,255,.74);
+    --surface-2: rgba(247,250,249,.88);
+    --surface-3: rgba(237,243,241,.96);
+    --border: rgba(28,44,36,.11);
+    --border-strong: rgba(28,44,36,.17);
+    --shadow: 0 22px 60px rgba(40,55,48,.14);
+  }
+}
+
+html { background: var(--bg); }
+body {
+  background:
+    radial-gradient(circle at 8% 0%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 30%),
+    radial-gradient(circle at 92% 18%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 25%),
+    radial-gradient(circle at 78% 92%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 28%),
+    var(--bg);
+}
+.app-shell { position: relative; isolation: isolate; }
+.app-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 5%, transparent), transparent 35%),
+    radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--accent) 4%, transparent), transparent 42%);
+}
+
+.topbar { margin-bottom: 30px; }
+.topbar > div:first-child { position: relative; }
+.topbar > div:first-child::after {
+  content: "";
+  display: block;
+  width: 76px;
+  height: 3px;
+  margin-top: 12px;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 20%, transparent));
+  box-shadow: 0 0 22px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.avatar {
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--accent) 18%, transparent), inset 0 1px 0 rgba(255,255,255,.08);
+}
+
+.balance-card,
+.summary-card,
+.section,
+.activity-list-section,
+.insights-section,
+.insights-hero,
+.settings-card,
+.settings-hero,
+.activity-summary,
+.contribution-card {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 42%),
+    linear-gradient(180deg, rgba(255,255,255,.035), transparent 55%),
+    var(--surface);
+  border-color: color-mix(in srgb, var(--accent) 18%, var(--border));
+}
+.balance-card {
+  box-shadow: 0 28px 70px color-mix(in srgb, var(--accent) 12%, rgba(0,0,0,.28)), inset 0 1px 0 rgba(255,255,255,.07);
+}
+.summary-card {
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 16px 42px color-mix(in srgb, var(--accent) 8%, rgba(0,0,0,.18)), inset 0 1px 0 rgba(255,255,255,.06);
+}
+.summary-card::after {
+  content: "";
+  position: absolute;
+  width: 110px;
+  height: 110px;
+  right: -45px;
+  bottom: -55px;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 20%, transparent), transparent 68%);
+  pointer-events: none;
+}
+.section,
+.activity-list-section,
+.insights-section { box-shadow: 0 14px 38px color-mix(in srgb, var(--accent) 6%, rgba(0,0,0,.16)); }
+
+.transaction-list { padding: 3px; border: 1px solid color-mix(in srgb, var(--accent) 8%, var(--border)); background: color-mix(in srgb, var(--surface-3) 35%, transparent); }
+.transaction { padding: 14px 10px; border-radius: 12px; }
+.transaction-amount { padding-right: 12px; }
+.transaction-button:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); }
+.transaction-icon { box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 8px 22px color-mix(in srgb, var(--accent) 8%, transparent); }
+
+.bottom-nav {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border-strong));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 55%), color-mix(in srgb, var(--surface) 86%, transparent);
+  box-shadow: 0 22px 60px rgba(0,0,0,.30), 0 0 28px color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.nav-item.active { background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 24%, transparent), color-mix(in srgb, var(--accent) 9%, transparent)); box-shadow: inset 0 1px 0 rgba(255,255,255,.06); }
+.nav-add { box-shadow: 0 12px 32px color-mix(in srgb, var(--accent) 35%, transparent), inset 0 1px 0 rgba(255,255,255,.22); }
+
+.modal-backdrop { background: color-mix(in srgb, var(--bg) 76%, transparent); }
+.expense-modal,
+.expense-details-modal {
+  background:
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 34%),
+    linear-gradient(180deg, rgba(255,255,255,.045), transparent 38%),
+    var(--surface);
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border-strong));
+  box-shadow: 0 40px 100px rgba(0,0,0,.42), 0 0 50px color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.details-grid > div,
+.field input,
+.field select,
+.amount-input-wrapper,
+.split-preview,
+.settlement-summary,
+.settlement-note {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 5%, transparent), transparent 60%), var(--surface-2);
+  border-color: color-mix(in srgb, var(--accent) 12%, var(--border));
+}
+.segmented-control { background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 65%), color-mix(in srgb, var(--surface-3) 82%, transparent); }
+.segmented-control button.selected { background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 14%, var(--surface)), var(--surface)); box-shadow: 0 7px 22px color-mix(in srgb, var(--accent) 10%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--accent) 20%, var(--border)); }
+
+/* Settlement: remove native number steppers completely. */
+.settlement-modal input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+.settlement-modal input[type="number"]::-webkit-inner-spin-button,
+.settlement-modal input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* Add-expense split preview: amount is intentionally centered. */
+.split-preview { justify-content: center; min-height: 48px; text-align: center; }
+.split-preview .split-amount-each { width: 100%; text-align: center; }
+.split-tip {
+  width: 100%;
+  margin: -2px 0 12px;
+  padding: 7px 10px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 10%, transparent), color-mix(in srgb, var(--accent) 4%, transparent), color-mix(in srgb, var(--accent) 10%, transparent));
+  color: color-mix(in srgb, var(--text-soft) 92%, var(--accent));
+  font-size: 10px;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-align: center;
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.025), 0 5px 18px rgba(0,0,0,.06);
+}
+.split-tip span { display: inline-block; animation: duospend-tip-slide 4.8s ease-in-out infinite alternate; will-change: transform; }
+@keyframes duospend-tip-slide { from { transform: translateX(0); } to { transform: translateX(-7%); } }
+
+/* Household popup: make the relationship between the two members explicit. */
+.household-people { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); align-items: center; gap: 10px; margin-bottom: 14px; }
+.household-person { min-width: 0; padding: 15px; border: 1px solid color-mix(in srgb, var(--accent) 15%, var(--border)); border-radius: 16px; background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 65%), var(--surface-2); }
+.household-person span { display: block; margin-bottom: 5px; color: var(--text-muted); font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.household-person strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.household-person-you { box-shadow: inset 3px 0 0 var(--accent); }
+.household-person-partner { box-shadow: inset -3px 0 0 var(--accent); }
+.household-connection { display: grid; justify-items: center; gap: 2px; color: var(--accent); }
+.household-connection span { font-size: 8px; font-weight: 850; letter-spacing: .12em; }
+.household-connection strong { font-size: 16px; }
+.household-meta-grid { margin-top: 2px; }
+
+@media(max-width:640px) {
+  .transaction { padding-right: 8px; }
+  .transaction-amount { padding-right: 10px; }
+  .household-people { grid-template-columns: 1fr; }
+  .household-connection { display: flex; justify-content: center; flex-direction: row-reverse; gap: 6px; }
+  .household-meta-grid { margin-top: 12px; }
+}

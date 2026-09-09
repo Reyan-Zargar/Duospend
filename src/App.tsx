@@ -116,6 +116,7 @@ type HouseholdCache = {
   inviteCode: string;
   memberCount: number;
   profileDisplayName: string;
+  partnerDisplayName: string;
   currencyCode: CurrencyCode;
 };
 
@@ -143,6 +144,10 @@ const getHouseholdCache = (userId: string): HouseholdCache | null => {
         typeof parsed.profileDisplayName === "string"
           ? parsed.profileDisplayName
           : "User",
+      partnerDisplayName:
+        typeof parsed.partnerDisplayName === "string"
+          ? parsed.partnerDisplayName
+          : "Partner",
       currencyCode: isCurrencyCode(parsed.currencyCode)
         ? parsed.currencyCode
         : "INR",
@@ -286,6 +291,7 @@ function App() {
   const [showHouseholdPanel, setShowHouseholdPanel] = useState(false);
   const [householdMemberCount, setHouseholdMemberCount] = useState(1);
   const [partnerUserId, setPartnerUserId] = useState<string | null>(null);
+  const [partnerDisplayName, setPartnerDisplayName] = useState("Partner");
   const [categoryRows, setCategoryRows] = useState<
     Array<{ id: string; name: string; icon: string }>
   >([]);
@@ -403,6 +409,7 @@ function App() {
           setInviteCode("");
           setHouseholdMemberCount(0);
           setPartnerUserId(null);
+          setPartnerDisplayName("Partner");
           setCategoryRows([]);
           setTransactions([]);
           setSettlements([]);
@@ -425,6 +432,7 @@ function App() {
           setHouseholdName(cachedHousehold.householdName);
           setInviteCode(cachedHousehold.inviteCode);
           setHouseholdMemberCount(cachedHousehold.memberCount);
+          setPartnerDisplayName(cachedHousehold.partnerDisplayName);
           setCurrencyCode(cachedHousehold.currencyCode);
           setHouseholdSetupRequired(false);
           setHouseholdLoading(false);
@@ -465,6 +473,7 @@ function App() {
 
           setHouseholdId(null);
           setPartnerUserId(null);
+          setPartnerDisplayName("Partner");
           setCategoryRows([]);
           setTransactions([]);
           setHouseholdName("DuoSpend Home");
@@ -542,6 +551,7 @@ function App() {
           inviteCode: household.invite_code || "",
           memberCount: members?.length ?? 0,
           profileDisplayName: profile?.display_name || "User",
+          partnerDisplayName: "Partner",
           currencyCode:
             isCurrencyCode(household.currency)
               ? household.currency
@@ -650,6 +660,7 @@ function App() {
         dataLoadedRef.current = false;
         if (mounted) {
           setPartnerUserId(null);
+          setPartnerDisplayName("Partner");
           setCategoryRows([]);
           setTransactions([]);
           setDataLoading(false);
@@ -677,6 +688,18 @@ function App() {
 
         const nextPartnerUserId =
           (members ?? []).map((member) => member.user_id).find((id) => id !== userId) ?? null;
+
+        let nextPartnerDisplayName = "Partner";
+        if (nextPartnerUserId) {
+          const { data: partnerProfile, error: partnerProfileError } = await supabase
+            .from("profiles")
+            .select("display_name")
+            .eq("id", nextPartnerUserId)
+            .maybeSingle();
+
+          if (partnerProfileError) throw partnerProfileError;
+          nextPartnerDisplayName = partnerProfile?.display_name?.trim() || "Partner";
+        }
 
         const { data: categories, error: categoriesError } = await supabase
           .from("categories")
@@ -783,6 +806,7 @@ function App() {
         if (!mounted) return;
 
         setPartnerUserId(nextPartnerUserId);
+        setPartnerDisplayName(nextPartnerDisplayName);
         setCategoryRows(categories ?? []);
         setTransactions(mappedTransactions);
         setSettlements(mappedSettlements);
@@ -1405,6 +1429,7 @@ function App() {
         inviteCode,
         memberCount: householdMemberCount,
         profileDisplayName,
+        partnerDisplayName,
         currencyCode: nextCurrency,
       });
     } catch (error) {
@@ -1630,6 +1655,8 @@ function App() {
       {showHouseholdPanel && (
         <HouseholdPanelModal
           householdName={householdName}
+          userDisplayName={profileDisplayName}
+          partnerDisplayName={partnerDisplayName}
           inviteCode={inviteCode}
           memberCount={householdMemberCount}
           onClose={() => setShowHouseholdPanel(false)}
@@ -2084,11 +2111,15 @@ function HouseholdSetupScreen({
 
 function HouseholdPanelModal({
   householdName,
+  userDisplayName,
+  partnerDisplayName,
   inviteCode,
   memberCount,
   onClose,
 }: {
   householdName: string;
+  userDisplayName: string;
+  partnerDisplayName: string;
   inviteCode: string;
   memberCount: number;
   onClose: () => void;
@@ -2125,7 +2156,22 @@ function HouseholdPanelModal({
           </button>
         </div>
 
-        <div className="details-grid">
+        <div className="household-people">
+          <div className="household-person household-person-you">
+            <span>You</span>
+            <strong>{userDisplayName}</strong>
+          </div>
+          <div className="household-connection">
+            <span>TOGETHER</span>
+            <strong>×</strong>
+          </div>
+          <div className="household-person household-person-partner">
+            <span>Partner</span>
+            <strong>{memberCount >= 2 ? partnerDisplayName : "Waiting for partner"}</strong>
+          </div>
+        </div>
+
+        <div className="details-grid household-meta-grid">
           <div>
             <span>Members</span>
             <strong>{memberCount} / 2</strong>
@@ -2185,7 +2231,7 @@ function HomeScreen({
       <header className="topbar">
         <div>
           <p className="eyebrow">DUOSPEND</p>
-          <h1>Good morning, {displayName}</h1>
+          <h1>Welcome back, {displayName}</h1>
         </div>
 
         <button className="avatar" aria-label="Household" onClick={onHousehold}>
@@ -2974,15 +3020,19 @@ function AddExpenseModal({
         </div>
 
         {expenseFor === "Both" && (
-          <div className="split-preview">
-            <span>50 / 50 split</span>
+          <>
+            <div className="split-preview">
+              <strong className="split-amount-each">
+                {amount
+                  ? `${formatCurrency(Number(amount) / 2)} each`
+                  : "Enter an amount"}
+              </strong>
+            </div>
 
-            <strong>
-              {amount
-                ? `${formatCurrency(Number(amount) / 2)} each`
-                : "Enter an amount"}
-            </strong>
-          </div>
+            <div className="split-tip" aria-label="DuoSpend tip">
+              <span>Don't log your gifts and surprises here dummy ✨</span>
+            </div>
+          </>
         )}
 
         {error && (
